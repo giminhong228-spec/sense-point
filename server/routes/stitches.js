@@ -43,14 +43,16 @@ router.post('/', function(req, res) {
 // GET /api/stitches — 코 목록
 router.get('/', function(req, res) {
   try {
+    var limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    var offset = parseInt(req.query.offset) || 0;
     var stitches;
     if (req.query.thread_id) {
       stitches = db.getAll(
-        'SELECT * FROM stitches WHERE thread_a_id = ? OR thread_b_id = ? ORDER BY created_at DESC',
-        [req.query.thread_id, req.query.thread_id]
+        'SELECT * FROM stitches WHERE thread_a_id = ? OR thread_b_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        [req.query.thread_id, req.query.thread_id, limit, offset]
       );
     } else {
-      stitches = db.getAll('SELECT * FROM stitches ORDER BY created_at DESC', []);
+      stitches = db.getAll('SELECT * FROM stitches ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
     }
     res.json(stitches);
   } catch (err) {

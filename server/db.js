@@ -1,115 +1,109 @@
 /**
- * SQLite Database Setup (sql.js — WebAssembly, no native deps)
+ * SQLite Database Setup (better-sqlite3 — native, synchronous)
  * v2: 올·실·코·편물 재설계
+ *
+ * better-sqlite3 장점:
+ *   - 파일에 직접 읽기/쓰기 (메모리에 전체 DB 올리지 않음)
+ *   - WAL 모드: 읽기와 쓰기 동시 가능
+ *   - 동기 API: 더 빠르고 예측 가능
  */
-const initSqlJs = require('sql.js');
-const fs = require('fs');
-const path = require('path');
+var Database = require('better-sqlite3');
+var fs = require('fs');
+var path = require('path');
 
-const DB_DIR = path.join(__dirname, 'data');
-const DB_PATH = path.join(DB_DIR, 'knitting.db');
+var DB_DIR = path.join(__dirname, 'data');
+var DB_PATH = path.join(DB_DIR, 'knitting.db');
 
-let db = null;
+var db = null;     // DBCompat wrapper
+var rawDb = null;  // better-sqlite3 instance
 
 function generateId(prefix) {
   return (prefix || 'id') + '_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
 }
 
-async function initDB() {
-  const SQL = await initSqlJs();
+/**
+ * sql.js 호환 래퍼
+ * 기존 코드에서 db.getDB().run(sql, params), db.getDB().exec(sql, params) 패턴을 유지
+ */
+function DBCompat(betterDb) {
+  this._db = betterDb;
+}
 
+/**
+ * run: DDL/DML 실행 (INSERT, UPDATE, DELETE, CREATE TABLE 등)
+ * sql.js와 동일한 호출 방식: db.run(sql, [param1, param2, ...])
+ */
+DBCompat.prototype.run = function(sql, params) {
+  if (params && params.length) {
+    var stmt = this._db.prepare(sql);
+    return stmt.run.apply(stmt, params);
+  }
+  return this._db.exec(sql);
+};
+
+/**
+ * exec: SELECT 쿼리 실행, sql.js 포맷으로 반환
+ * 반환값: [{columns: [...], values: [[...]]}]
+ * 기존 rowsToObjects()와 호환
+ */
+DBCompat.prototype.exec = function(sql, params) {
+  try {
+    var stmt = this._db.prepare(sql);
+    var rows;
+    if (params && params.length) {
+      rows = stmt.all.apply(stmt, params);
+    } else {
+      rows = stmt.all();
+    }
+    if (!rows || !rows.length) return [];
+    var columns = Object.keys(rows[0]);
+    var values = rows.map(function(r) {
+      return columns.map(function(c) { return r[c]; });
+    });
+    return [{ columns: columns, values: values }];
+  } catch (e) {
+    // DDL이나 비-SELECT 문은 빈 배열 반환
+    return [];
+  }
+};
+
+async function initDB() {
   if (!fs.existsSync(DB_DIR)) {
     fs.mkdirSync(DB_DIR, { recursive: true });
   }
 
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
+  rawDb = new Database(DB_PATH);
+  rawDb.pragma('journal_mode = WAL');
+  rawDb.pragma('foreign_keys = ON');
+
+  db = new DBCompat(rawDb);
 
   // ── 올 (fiber) ──────────────────────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS fibers (
-    id TEXT PRIMARY KEY,
-    text TEXT NOT NULL,
-    source TEXT DEFAULT '',
-    source_id TEXT DEFAULT '',
-    source_title TEXT DEFAULT '',
-    tension INTEGER DEFAULT 3 CHECK(tension BETWEEN 1 AND 5),
-    tone TEXT DEFAULT 'resonance',
-    caught_at INTEGER NOT NULL,
-    source_range TEXT DEFAULT NULL,
-    born_from_id TEXT DEFAULT NULL,
-    born_from_type TEXT DEFAULT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS fibers (\n    id TEXT PRIMARY KEY,\n    text TEXT NOT NULL,\n    source TEXT DEFAULT '',\n    source_id TEXT DEFAULT '',\n    source_title TEXT DEFAULT '',\n    tension INTEGER DEFAULT 3 CHECK(tension BETWEEN 1 AND 5),\n    tone TEXT DEFAULT 'resonance',\n    caught_at INTEGER NOT NULL,\n    source_range TEXT DEFAULT NULL,\n    born_from_id TEXT DEFAULT NULL,\n    born_from_type TEXT DEFAULT NULL\n  )");
 
   // ── 실 (thread) — 올+올 연결 ────────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS threads (
-    id TEXT PRIMARY KEY,
-    fiber_a_id TEXT NOT NULL,
-    fiber_b_id TEXT NOT NULL,
-    why TEXT DEFAULT '',
-    created_at INTEGER NOT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS threads (\n    id TEXT PRIMARY KEY,\n    fiber_a_id TEXT NOT NULL,\n    fiber_b_id TEXT NOT NULL,\n    why TEXT DEFAULT '',\n    created_at INTEGER NOT NULL\n  )");
 
   // ── 코 (stitch) — 실+실 연결 ────────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS stitches (
-    id TEXT PRIMARY KEY,
-    thread_a_id TEXT NOT NULL,
-    thread_b_id TEXT NOT NULL,
-    why TEXT DEFAULT '',
-    created_at INTEGER NOT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS stitches (\n    id TEXT PRIMARY KEY,\n    thread_a_id TEXT NOT NULL,\n    thread_b_id TEXT NOT NULL,\n    why TEXT DEFAULT '',\n    created_at INTEGER NOT NULL\n  )");
 
   // ── 편물 (fabric) — 코들의 모임 ──────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS fabrics (
-    id TEXT PRIMARY KEY,
-    title TEXT DEFAULT '',
-    insight TEXT DEFAULT '',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS fabrics (\n    id TEXT PRIMARY KEY,\n    title TEXT DEFAULT '',\n    insight TEXT DEFAULT '',\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL\n  )");
 
-  db.run(`CREATE TABLE IF NOT EXISTS fabric_stitches (
-    fabric_id TEXT NOT NULL,
-    stitch_id TEXT NOT NULL,
-    added_at INTEGER NOT NULL,
-    PRIMARY KEY (fabric_id, stitch_id)
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS fabric_stitches (\n    fabric_id TEXT NOT NULL,\n    stitch_id TEXT NOT NULL,\n    added_at INTEGER NOT NULL,\n    PRIMARY KEY (fabric_id, stitch_id)\n  )");
 
   // ── 교차 연결 — 다른 층위 간 ─────────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS connections (
-    id TEXT PRIMARY KEY,
-    node_a_id TEXT NOT NULL,
-    node_b_id TEXT NOT NULL,
-    why TEXT DEFAULT '',
-    created_at INTEGER NOT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS connections (\n    id TEXT PRIMARY KEY,\n    node_a_id TEXT NOT NULL,\n    node_b_id TEXT NOT NULL,\n    why TEXT DEFAULT '',\n    created_at INTEGER NOT NULL\n  )");
 
   // ── 임베딩 (통합) ───────────────────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS embeddings (
-    node_id TEXT PRIMARY KEY,
-    embedding TEXT NOT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS embeddings (\n    node_id TEXT PRIMARY KEY,\n    embedding TEXT NOT NULL\n  )");
 
   // ── 노트 (소스 문서) ────────────────────────────
-  db.run(`CREATE TABLE IF NOT EXISTS notes (
-    id TEXT PRIMARY KEY,
-    type TEXT DEFAULT 'blank',
-    title TEXT DEFAULT '',
-    content TEXT DEFAULT '',
-    html_content TEXT DEFAULT '',
-    answers TEXT DEFAULT NULL,
-    bookshelf_id TEXT DEFAULT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`);
+  db.run("CREATE TABLE IF NOT EXISTS notes (\n    id TEXT PRIMARY KEY,\n    type TEXT DEFAULT 'blank',\n    title TEXT DEFAULT '',\n    content TEXT DEFAULT '',\n    html_content TEXT DEFAULT '',\n    answers TEXT DEFAULT NULL,\n    bookshelf_id TEXT DEFAULT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL\n  )");
 
   // ── 마이그레이션 ────────────────────────────────
   migrateV2();
 
-  persist();
   return db;
 }
 
@@ -245,7 +239,6 @@ function migrateV2() {
       [fabricId, '', k.insight || '', k.created_at || now, k.created_at || now]
     );
 
-    // knot_stitches → connections (기존 stitch→thread 매핑 활용)
     var knotLinks = oldKnotStitches.filter(function(ks) { return ks.knot_id === k.id; });
     knotLinks.forEach(function(ks) {
       var threadId = stitchToThread[ks.stitch_id];
@@ -287,19 +280,22 @@ function migrateV2() {
   console.log('[migration] v1 → v2 완료');
 }
 
+/**
+ * persist — better-sqlite3는 디스크에 직접 쓰므로 no-op
+ * 기존 호출 코드와의 호환성을 위해 유지
+ */
 function persist() {
-  if (!db) return;
-  var data = db.export();
-  var buffer = Buffer.from(data);
-  var tmpPath = DB_PATH + '.tmp';
-  fs.writeFileSync(tmpPath, buffer);
-  fs.renameSync(tmpPath, DB_PATH);
+  // No-op: better-sqlite3 writes directly to disk
 }
 
 function getDB() {
   return db;
 }
 
+/**
+ * sql.js 호환 포맷 [{columns, values}] → 객체 배열로 변환
+ * 기존 코드(hint.js 등)와의 호환성을 위해 유지
+ */
 function rowsToObjects(result) {
   if (!result || !result.length) return [];
   var stmt = result[0];
@@ -310,13 +306,20 @@ function rowsToObjects(result) {
   });
 }
 
+/**
+ * 최적화된 단일 행 조회 — better-sqlite3 네이티브 사용
+ */
 function getOne(sql, params) {
-  var rows = rowsToObjects(getDB().exec(sql, params));
-  return rows.length ? rows[0] : null;
+  var stmt = rawDb.prepare(sql);
+  return (params && params.length ? stmt.get.apply(stmt, params) : stmt.get()) || null;
 }
 
+/**
+ * 최적화된 다중 행 조회 — better-sqlite3 네이티브 사용
+ */
 function getAll(sql, params) {
-  return rowsToObjects(getDB().exec(sql, params));
+  var stmt = rawDb.prepare(sql);
+  return params && params.length ? stmt.all.apply(stmt, params) : stmt.all();
 }
 
-module.exports = { initDB, getDB, persist, generateId, rowsToObjects, getOne, getAll };
+module.exports = { initDB: initDB, getDB: getDB, persist: persist, generateId: generateId, rowsToObjects: rowsToObjects, getOne: getOne, getAll: getAll };

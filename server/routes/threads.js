@@ -56,14 +56,16 @@ router.post('/', function(req, res) {
 // GET /api/threads — 실 목록
 router.get('/', function(req, res) {
   try {
+    var limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    var offset = parseInt(req.query.offset) || 0;
     var threads;
     if (req.query.fiber_id) {
       threads = db.getAll(
-        'SELECT * FROM threads WHERE fiber_a_id = ? OR fiber_b_id = ? ORDER BY created_at DESC',
-        [req.query.fiber_id, req.query.fiber_id]
+        'SELECT * FROM threads WHERE fiber_a_id = ? OR fiber_b_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        [req.query.fiber_id, req.query.fiber_id, limit, offset]
       );
     } else {
-      threads = db.getAll('SELECT * FROM threads ORDER BY created_at DESC', []);
+      threads = db.getAll('SELECT * FROM threads ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
     }
     res.json(threads);
   } catch (err) {

@@ -36,14 +36,16 @@ router.post('/', function(req, res) {
 // GET /api/connections — 연결 목록
 router.get('/', function(req, res) {
   try {
+    var limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    var offset = parseInt(req.query.offset) || 0;
     var conns;
     if (req.query.node_id) {
       conns = db.getAll(
-        'SELECT * FROM connections WHERE node_a_id = ? OR node_b_id = ? ORDER BY created_at DESC',
-        [req.query.node_id, req.query.node_id]
+        'SELECT * FROM connections WHERE node_a_id = ? OR node_b_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        [req.query.node_id, req.query.node_id, limit, offset]
       );
     } else {
-      conns = db.getAll('SELECT * FROM connections ORDER BY created_at DESC', []);
+      conns = db.getAll('SELECT * FROM connections ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
     }
     res.json(conns);
   } catch (err) {

@@ -57,7 +57,9 @@ router.post('/', function(req, res) {
 // GET /api/fabrics — 편물 목록
 router.get('/', function(req, res) {
   try {
-    var fabrics = db.getAll('SELECT * FROM fabrics ORDER BY created_at DESC', []);
+    var limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    var offset = parseInt(req.query.offset) || 0;
+    var fabrics = db.getAll('SELECT * FROM fabrics ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
     fabrics.forEach(function(f) {
       var links = db.getAll('SELECT stitch_id FROM fabric_stitches WHERE fabric_id = ?', [f.id]);
       f.stitch_ids = links.map(function(l) { return l.stitch_id; });
